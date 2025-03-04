@@ -17,6 +17,8 @@ module load CUDA/12.4.0
 
 source ./venv/bin/activate
 
+export NCCL_SOCKET_IFNAME="eno1np0" # Tell Snellius to use traditional networking, related to infiniband issues: https://servicedesk.surf.nl/wiki/display/WIKI/Snellius+known+issues#Snelliusknownissues-UsingNCCLforGPU%3C=%3EGPUcommunication
+
 echo $$
 
 srun python -c "import os, torch; print(os.environ.get(\"CUDA_VISIBLE_DEVICES\"), torch.cuda.is_available(), torch.cuda.device_count())"
