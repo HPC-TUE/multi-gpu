@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=test
 #SBATCH --time=1:00:00
-#SBATCH --partition=gpu_h100 # Run on the a100 (see h100.sh for other way of running)
+#SBATCH --partition=gpu_h100 # Run on the h100 (see a100.sh for other way of running)
 #SBATCH --nodes=2 # Use 2 nodes
 #SBATCH --gpus-per-node=4 # Tell the scheduler to use 4 gpus per node, gres parameter is depricated on Snellius for this
 #SBATCH --tasks-per-node=4 # Tell the scheduler that there will be 4 gpus and thus 4 tasks per node

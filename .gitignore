@@ -5,3 +5,4 @@ bak
 wandb
 checkpoints
 .tritone
+results/
