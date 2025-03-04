@@ -1,1 +1,6 @@
 __pycache__
+venv
+*.out
+bak
+wandb
+checkpoints
