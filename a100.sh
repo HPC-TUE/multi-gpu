@@ -20,4 +20,4 @@ export NCCL_SOCKET_IFNAME="eno1np0" # Tell Snellius to use traditional networkin
 source ./venv/bin/activate
 
 # Run your code, using srun fixes the multinode running
-srun python ./lightning.py --nodes=2 "$@" --entity=bjmaat --project_name=multi_slurm_test --run_name=test_auto --strategy=auto
+srun python ./lightning.py --nodes=2 "$@"

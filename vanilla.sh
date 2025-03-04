@@ -36,4 +36,4 @@ srun torchrun \
   --rdzv_id $RANDOM \
   --rdzv_backend c10d \
   --rdzv_endpoint $head_node_ip:29500 \
-  ./vanilla.py "$@" --entity=bjmaat --project_name=multi_slurm_test --run_name=test_auto --strategy=auto
+  ./vanilla.py "$@"
