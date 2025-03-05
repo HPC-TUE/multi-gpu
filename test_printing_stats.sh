@@ -55,6 +55,6 @@ if local_rank == 0:
 
     print('Multi-node setup is working correctly!')
     print('-------------------------------------')
-"
+" "$@"
 
 echo "Job completed successfully!"

@@ -6,3 +6,4 @@ wandb
 checkpoints
 .tritone
 results/
+example_accelerate/
