@@ -4,10 +4,15 @@ import torch
 from torch import nn
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.utils.data import Dataset, DataLoader, random_split
 
-import fire, random, wandb, numpy, natsort, glob, tqdm
-from collections import defaultdict
+from fairscale.nn.data_parallel import ShardedDataParallel as ShardedDDP
+from fairscale.optim.oss import OSS
+
+import deepspeed
+
+import fire, random, wandb, numpy, tqdm
 
 class RndDataset(Dataset):
     # Simple random dataset, replace with your own DS
@@ -146,9 +151,18 @@ def main(
     dev=False,  # If dev True, do not connect to WandB (best for development)
     seed=42
 ):
+    # Continue normal setup
+    run = None
+    assert project_name is not None, "Provide a project name and log into WandB."
+    assert entity is not None, "Provide your WandB username and log into WandB."
+    assert strategy.lower() in ['fsdp', 'deepspeed', 'auto', 'ddp', 'fairscale'], "Use FSDP, fsdp, auto, or deepspeed."
+    assert run_name is not None and not resume, "Run name cannot be None when resuming."
+    strategy = strategy.lower()
+
     # The way to do it on a SLURM only system
     # The trick lies in the use of world_size, this tells the distributer how many GPUS in total there are
     # Otherwise it will attempt to spawn all processes on just the GPUs of the master node causing erros
+    print(os.environ["WORLD_SIZE"])
     global_rank = int(os.environ['SLURM_PROCID']) # Which GPU in all gpus
     local_rank = global_rank % torch.cuda.device_count() # Which GPU in the current gpus
     dist.init_process_group(
@@ -167,13 +181,6 @@ def main(
     # Tell toch which GPU to use
     torch.cuda.set_device(local_rank)
     
-    # Continue normal setup
-    run = None
-    assert project_name is not None, "Provide a project name and log into WandB."
-    assert entity is not None, "Provide your WandB username and log into WandB."
-    assert strategy in ['FSDP', 'fsdp', 'deepspeed', 'auto'], "Use FSDP, fsdp, auto, or deepspeed."
-    assert run_name is not None and not resume, "Run name cannot be None when resuming."
-
     torch.manual_seed(seed)
     random.seed(seed)
     numpy.random.seed(seed)
@@ -213,9 +220,25 @@ def main(
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
     model = Model(features=10000)
-    model.cuda(local_rank) # First move the model to the GPU then DDP it
-    model = DDP(model, device_ids=[local_rank]) # Move the model in DDP setting to the GPU
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
+    if strategy in ['auto', 'ddp', 'fairscale', 'fsdp']:
+        model.cuda(local_rank) # First move the model to the GPU then DDP it
+        if strategy in ['auto', 'ddp']:
+            model = DDP(model, device_ids=[local_rank]) # Move the model in DDP setting to the GPU
+            optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
+        elif strategy == 'fsdp':
+            model = FSDP(model)
+            optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
+        elif strategy == 'fairscale':
+            optimizer = OSS(params=model.parameters(), optim=torch.optim.Adam, lr=lr)
+            model = ShardedDDP(model, optimizer)
+    elif strategy == 'deepspeed':
+        os.environ['LOCAL_RANK'] = str(local_rank) # For Deepspeed
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+        model, optimizer, _, _ = deepspeed.initialize(
+            model=model, 
+            optimizer=optimizer, 
+            config="deepspeed_config.json"
+        )
 
     trainer = Trainer(model, optimizer, max_epochs=250, run=run)
     trainer.train(train_loader, val_loader)

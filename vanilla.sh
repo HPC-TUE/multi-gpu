@@ -14,8 +14,17 @@ module load CUDA/12.4.0
 
 source ./venv/bin/activate
 
+export TRITON_CACHE_DIR='./.tritone' # Change the Triton dir for Deepspeed
+export NCCL_DEBUG=WARN
+if [[ "$SLURM_JOB_PARTITION" == *h100* ]]; then
+    export NCCL_SOCKET_IFNAME="eno2np0"
+else
+    export NCCL_SOCKET_IFNAME="eno1np0"
+fi 
+
 export MASTER_PORT=12340
 export WORLD_SIZE=$SLURM_NTASKS
-export MASTER_ADDR=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
+master_addr=$(scontrol show hostnames "$SLURM_JOB_NODELIST" | head -n 1)
+export MASTER_ADDR=$master_addr
 
-srun python ./vanilla.py --entity=bjmaat --project_name=multi_slurm_test --run_name=test_auto --strategy=auto
+srun python ./vanilla.py --nodes=2 "$@"

@@ -6,3 +6,4 @@ fire
 natsort
 lightning
 deepspeed
+fairscale
