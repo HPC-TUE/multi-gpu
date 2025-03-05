@@ -1,10 +1,12 @@
+import os
+import builtins
 import torch
 from torch import nn
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import Dataset, DataLoader, random_split
 
-import fire, random, wandb, numpy, os, natsort, glob, tqdm
+import fire, random, wandb, numpy, natsort, glob, tqdm
 from collections import defaultdict
 
 class RndDataset(Dataset):
@@ -19,19 +21,19 @@ class RndDataset(Dataset):
         return 10000
 
 class Model(nn.Module):
-    def __init__(self, features = 10000):
+    def __init__(self, features=10000):
         super().__init__()
-        self.linear = nn.Linear(features,5120)
-        self.linear2 = nn.Linear(5120,2560)
-        self.linear3 = nn.Linear(2560,1)
+        self.linear = nn.Linear(features, 5120)
+        self.linear2 = nn.Linear(5120, 2560)
+        self.linear3 = nn.Linear(2560, 1)
 
     def forward(self, x):
         x = self.linear(x)
-        x = nn.functional.sigmoid(x)
+        x = torch.sigmoid(x)
         x = self.linear2(x)
-        x = nn.functional.sigmoid(x)
+        x = torch.sigmoid(x)
         x = self.linear3(x)
-        x = nn.functional.sigmoid(x)
+        x = torch.sigmoid(x)
         return x
 
 class Trainer():
@@ -40,16 +42,22 @@ class Trainer():
         model: nn.Module,
         optimizer: torch.optim.Optimizer,
         max_epochs: int,
-        accumulate_gradient_batches: int | None = None
+        accumulate_gradient_batches: int | None = None,
+        run: wandb.sdk.wandb_run.Run | None = None
     ):
+        self.model = model
         self.max_epochs = max_epochs
         self.accumulate_gradient_batches = accumulate_gradient_batches
         
         self.optimizer = optimizer
-        self.local_rank = int(os.environ["LOCAL_RANK"])
-        self.global_rank = int(os.environ["RANK"])
-        self.model = model.to(self.local_rank)
-        self.model = DDP(self.model, device_ids=[self.local_rank])
+        # Use LOCAL_RANK if provided; otherwise fallback to SLURM_LOCALID.
+        self.global_rank = int(os.environ['SLURM_PROCID'])
+        self.local_rank = self.global_rank % torch.cuda.device_count()
+        # Optionally print rank info for debugging:
+        if self.global_rank == 0:
+            print(f"Global Rank: {self.global_rank}, Local Rank: {self.local_rank}")
+        if self.global_rank == 0:
+            run.watch(self.model)
 
     def train_step(self, batch):
         x, y = batch
@@ -75,8 +83,7 @@ class Trainer():
         for epoch in range(self.max_epochs):
             self.epoch = epoch
 
-            # Train loop
-            if self.local_rank == 0:
+            if self.global_rank == 0:
                 pbar = tqdm.tqdm(total=len(train_dataloader))
             self.optimizer.zero_grad()
             for batch_idx, batch in enumerate(train_dataloader):
@@ -94,143 +101,126 @@ class Trainer():
                     self.optimizer.step()
                     self.optimizer.zero_grad()
 
-                if self.local_rank == 0:
-                    wandb.log({
-                        'loss': loss.item()
-                    })
-                    pbar.set_postfix({
-                        "loss": loss.item()
-                    })
+                if self.global_rank == 0:
+                    wandb.log({'loss': loss.item()})
+                    pbar.set_postfix({"loss": loss.item()})
                     pbar.update(1)
                     
-            if self.local_rank == 0:
+            if self.global_rank == 0:
                 pbar.close()
 
-            # Validation loop
             if isinstance(val_dataloader, DataLoader):
-                if self.local_rank == 0:
+                if self.global_rank == 0:
                     pbar = tqdm.tqdm(total=len(val_dataloader))
                 for batch in val_dataloader:
                     batch = (x.to(self.local_rank) for x in batch)
                     loss = self.val_step(batch)
-
-                    if self.local_rank == 0:
-                        wandb.log({
-                            "loss": loss.item()
-                        })
-                        pbar.set_postfix({
-                            "loss": loss.item()
-                        })
+                    if self.global_rank == 0:
+                        wandb.log({"loss": loss.item()})
+                        pbar.set_postfix({"loss": loss.item()})
                         pbar.update(1)
-
-                if self.local_rank == 0:
+                if self.global_rank == 0:
                     pbar.close()
 
     def test(self, test_dataloader: DataLoader):
-        if self.local_rank == 0:
+        if self.global_rank == 0:
             pbar = tqdm.tqdm(total=len(test_dataloader))
         for batch in test_dataloader:
             batch = (x.to(self.local_rank) for x in batch)
             loss = self.test_step(batch)
-
-            if self.local_rank == 0:
-                wandb.log({
-                    "loss": loss.item()
-                })
-                pbar.set_postfix({
-                    "loss": loss.item()
-                })
+            if self.global_rank == 0:
+                wandb.log({"loss": loss.item()})
+                pbar.set_postfix({"loss": loss.item()})
                 pbar.update(1)
-
-        if self.local_rank == 0:
+        if self.global_rank == 0:
             pbar.close()
 
 def main(
-    batch_size = 32,
-    lr = 1e-4,
-
-    strategy = 'auto', # use DDP
-
-    project_name = None,
-    entity = None,
-    run_name = None,
-
-    resume = None,
-    dev = False, # If dev = True it will not connect to WandB (best for development)
-
-    seed = 42
+    batch_size=32,
+    lr=1e-4,
+    strategy='auto',  # use DDP
+    project_name=None,
+    entity=None,
+    run_name=None,
+    resume=None,
+    dev=False,  # If dev True, do not connect to WandB (best for development)
+    seed=42
 ):
-    assert project_name is not None, "Error project name not provided, give one and log into WandB using 'wandb login' in the CLI"
-    assert entity is not None, "Error entity not provided use your WandB username, give one and log into WandB using 'wandb login' in the CLI"
-    assert strategy in ['FSDP', 'fsdp', 'deepspeed', 'auto'], "Error, incorrect strategy, please use FSDP, fsdp, auto or deepspeed"
-    assert run_name is not None and not resume, "Error, run_name cannot be none when resuming"
+    # The way to do it on a SLURM only system
+    # The trick lies in the use of world_size, this tells the distributer how many GPUS in total there are
+    # Otherwise it will attempt to spawn all processes on just the GPUs of the master node causing erros
+    global_rank = int(os.environ['SLURM_PROCID']) # Which GPU in all gpus
+    local_rank = global_rank % torch.cuda.device_count() # Which GPU in the current gpus
+    dist.init_process_group(
+        backend='nccl',
+        init_method='env://',
+        world_size=int(os.environ["WORLD_SIZE"]),
+        rank=global_rank
+    )
 
-    print(project_name, entity, strategy)
+    # Suppress printing if not on master GPU.
+    if global_rank != 0:
+        def print_pass(*args):
+            pass
+        builtins.print = print_pass
 
-    # Set the seed
+    # Tell toch which GPU to use
+    torch.cuda.set_device(local_rank)
+    
+    # Continue normal setup
+    run = None
+    assert project_name is not None, "Provide a project name and log into WandB."
+    assert entity is not None, "Provide your WandB username and log into WandB."
+    assert strategy in ['FSDP', 'fsdp', 'deepspeed', 'auto'], "Use FSDP, fsdp, auto, or deepspeed."
+    assert run_name is not None and not resume, "Run name cannot be None when resuming."
+
     torch.manual_seed(seed)
     random.seed(seed)
     numpy.random.seed(seed)
 
-    # We do this because:
-    # You are using a CUDA device ('NVIDIA A100-SXM4-40GB') that has Tensor Cores. To properly utilize them, you should set torch.set_float32_matmul_precision('medium' | 'high') which will trade-off precision for performance. For more details, read https://pytorch.org/docs/stable/generated/torch.set_float32_matmul_precision.html#torch.set_float32_matmul_precision
-    torch.set_float32_matmul_precision('high') # Do medium for lower precision (not perse nescessary to do this step)
+    torch.set_float32_matmul_precision('high')
+    # Set device using LOCAL_RANK or SLURM_LOCALID.
 
-    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
-    dist.init_process_group(backend='nccl')
+    if global_rank == 0:
+        run = wandb.init(
+            project=project_name, 
+            entity=entity, 
+            name=run_name, 
+            config=locals(), 
+            mode='disabled' if dev else 'online', 
+            resume='allow' if isinstance(resume, str) else False,
+            id=resume
+        )
 
-    # init WandB
-    wandb.init(
-        project=project_name, 
-        entity=entity, 
-        name=run_name, 
-        config=locals(), 
-        mode='disabled' if dev else 'online', 
-        resume = 'allow' if isinstance(resume, str) else False,
-        id = resume
-    )
+    if global_rank == 0:
+        if resume:
+            run_name += f'_{resume}'
+        elif run_name is not None:
+            run_name += f'_{run.id}' if not dev and isinstance(run.id, str) else ''
+        else:
+            run_name = run.name
 
-    # Fix run name endings, in case resuming
-    if resume:
-        run_name += f'_{resume}'
-    elif run_name is not None:
-        run_name += f'_{wandb.run.id}' if not dev and isinstance(wandb.run.id, str) else ''
-    else:
-        run_name = wandb.run.name
-
-    # Create ckpt folder
-    os.makedirs(f'./checkpoints', exist_ok=True)
+    os.makedirs('./checkpoints', exist_ok=True)
 
     dataset = RndDataset()
-    train_size = int(0.7 * len(dataset))  # 70% for training
-    test_size = int(0.2 * len(dataset))   # 20% for testing
-    val_size = len(dataset) - train_size - test_size  # Remaining 10% for validation
+    train_size = int(0.7 * len(dataset))
+    test_size = int(0.2 * len(dataset))
+    val_size = len(dataset) - train_size - test_size
 
-    # Perform random split
     train_dataset, test_dataset, val_dataset = random_split(dataset, [train_size, test_size, val_size])
-
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
 
-    model = Model(features = 10000)
-    wandb.watch(model)
+    model = Model(features=10000)
+    model.cuda(local_rank) # First move the model to the GPU then DDP it
+    model = DDP(model, device_ids=[local_rank]) # Move the model in DDP setting to the GPU
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
 
-    trainer = Trainer(
-        model,
-        optimizer,
-        max_epochs=250
-    )
+    trainer = Trainer(model, optimizer, max_epochs=250, run=run)
+    trainer.train(train_loader, val_loader)
 
-    trainer.train(
-        train_loader,
-        val_loader
-    )
-
-    # Important cleanup step
     dist.destroy_process_group()
 
-
 if __name__ == "__main__":
-    fire.Fire(main) # Fire automates argparse for CLI arguments (I like this package a lot).
+    fire.Fire(main)

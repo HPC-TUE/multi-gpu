@@ -14,8 +14,12 @@ module load Python/3.11.3-GCCcore-12.3.0
 module load CUDA/12.4.0
 
 export TRITON_CACHE_DIR='./.tritone' # Change the Triton dir for Deepspeed
-export NCCL_SOCKET_IFNAME="eno1np0" # Tell Snellius to use traditional networking, related to infiniband issues: https://servicedesk.surf.nl/wiki/display/WIKI/Snellius+known+issues#Snelliusknownissues-UsingNCCLforGPU%3C=%3EGPUcommunication
-
+export NCCL_DEBUG=WARN
+if [[ "$SLURM_JOB_PARTITION" == *h100* ]]; then
+    export NCCL_SOCKET_IFNAME="eno2np0"
+else
+    export NCCL_SOCKET_IFNAME="eno1np0"
+fi 
 # Activate your environment
 source ./venv/bin/activate
 
