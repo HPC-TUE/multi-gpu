@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=test
-#SBATCH --time=1:00:00
+#SBATCH --time=00:05:00
 #SBATCH --partition=gpu_h100 # Run on the h100 (see a100.sh for other way of running)
 #SBATCH --nodes=2 # Use 2 nodes
 #SBATCH --gpus-per-node=4 # Tell the scheduler to use 4 gpus per node, gres parameter is depricated on Snellius for this
@@ -18,6 +18,7 @@ export NCCL_SOCKET_IFNAME="eno2np0" # Tell Snellius to use traditional networkin
 
 # Activate your environment
 source ./venv/bin/activate
+pip install --no-cache-dir -r requirements.txt
 
 # Run your code, using srun fixes the multinode running
-srun python ./lightning.py --nodes=2 "$@"
+srun python ./example_lighting/lightning_example.py --nodes=2 "$@" --entity=AI_team_SCC_TUe --project_name=multi_slurm_test_lighting --run_name=test_slurm_auto --strategy=auto

@@ -3,9 +3,9 @@ from torch import nn
 import torch.distributed as dist
 from torch.utils.data import Dataset, DataLoader, random_split
 
-import example_lighting.lightning as L
+import lightning as L
 from lightning.pytorch.loggers import WandbLogger
-from example_lighting.lightning import Callback
+from lightning import Callback
 from lightning.pytorch.callbacks import ModelCheckpoint, GradientAccumulationScheduler, LearningRateMonitor
 from lightning.pytorch.strategies import DeepSpeedStrategy, FSDPStrategy
 from lightning.pytorch.plugins.precision import DeepSpeedPrecision
