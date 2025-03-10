@@ -152,7 +152,6 @@ def main(
 
     strategy = 'auto', # use DDP
     nodes = 1, # Number of SLURM nodes
-    device_count = 0,
 
     project_name = None,
     entity = None,
