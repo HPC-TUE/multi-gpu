@@ -4,7 +4,7 @@
 #SBATCH --partition=gpu_h100
 #SBATCH --nodes=2
 #SBATCH --gpus-per-node=4
-#SBATCH --tasks-per-node=4 # crucial - only 1 task per dist per node!
+#SBATCH --tasks-per-node=4 # seems not affecting the result
 #SBATCH --output=./results/%x_%A_%a.out
 
 echo "Starting multi-node job on host $(hostname)..."
