@@ -6,4 +6,5 @@ wandb
 checkpoints
 .tritone
 results/
-# example_accelerate/
+example_accelerate/
+.deepspeed_env

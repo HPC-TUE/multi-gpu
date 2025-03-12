@@ -1,19 +1,9 @@
-"""
-Training strategies:
-Gradient accumulation is activated, change the steps with gradient_accumulation_steps
-Enabled DeepSpeed
-Enabled Zero 1
-Enabled Data Parallelism
-refer to https://huggingface.co/docs/accelerate/usage_guides/fsdp
-"""
-
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, random_split
 from torch.optim.lr_scheduler import CosineAnnealingLR, OneCycleLR
-from accelerate import Accelerator
+from accelerate import Accelerator, DDPCommunicationHookType, DistributedDataParallelKwargs
 from accelerate.logging import get_logger
 from accelerate.utils import set_seed, ProjectConfiguration, GradientAccumulationPlugin
 
@@ -23,16 +13,14 @@ import fire
 import os
 from datetime import datetime
 
-import deepspeed
-
 # Setup logging
 logger = get_logger(__name__)
 
 class RandomDataset(Dataset):
     def __init__(self, num_samples=10000, feature_dim=10000):
         super().__init__()
-        self.data = torch.randn((num_samples, feature_dim))
-        self.labels = torch.randn((num_samples, 1))
+        self.data = torch.randn((num_samples, feature_dim)).to(torch.bfloat16) # generate bf16 dataset
+        self.labels = torch.randn((num_samples, 1)).to(torch.bfloat16)
 
     def __getitem__(self, index):
         return self.data[index], self.labels[index]
@@ -61,7 +49,7 @@ class MultiLayerNetwork(nn.Module):
         return self.network(x)
 
 def main(
-    batch_size=32,
+    per_device_batch_size=32,
     lr=1e-4,
     num_epochs=5,
     project_name=None,
@@ -77,6 +65,7 @@ def main(
     # Validate inputs
     assert project_name is not None, "Error project name not provided, give one and log into WandB using 'wandb login' in the CLI"
     assert entity is not None, "Error entity not provided use your WandB username, give one and log into WandB using 'wandb login' in the CLI"
+    assert run_name is not None, "Error run name not provided, give a run name for your experinent in the argument"
 
     # Generate unique run name if not provided
     if run_name is None:
@@ -95,9 +84,13 @@ def main(
     # Optional Config gradient_accumulation_plugin
     gradient_accumulation_plugin = GradientAccumulationPlugin(num_steps=gradient_accumulation_steps, sync_each_batch = True) #  Whether to synchronize setting the gradients at each data batch. Seting to True may reduce memory requirements when using gradient accumulation with distributed training, at expense of speed.
 
+    # DDP Communication Hook setup
+    ddp_kwargs = DistributedDataParallelKwargs(comm_hook=DDPCommunicationHookType.BF16) # additional set up can be seen https://huggingface.co/docs/accelerate/usage_guides/ddp_comm_hook?fp16=Accelerate&bf16=Accelerate#ddp-communication-hooks-utilities
+
     # Configure Accelerator
     accelerator = Accelerator(
         gradient_accumulation_plugin=gradient_accumulation_plugin,
+        kwargs_handlers=[ddp_kwargs], # enable ddp
         mixed_precision=mixed_precision,
         log_with="wandb" if not dev else None,
         project_config=project_config,
@@ -113,9 +106,9 @@ def main(
     train_dataset, test_dataset, val_dataset = random_split(dataset, [train_size, test_size, val_size])
 
     # Create data loaders
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=per_device_batch_size, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=per_device_batch_size, shuffle=False)
+    val_loader = DataLoader(val_dataset, batch_size=per_device_batch_size, shuffle=False)
 
     # Initialize model and optimizer
     model = MultiLayerNetwork()
@@ -149,33 +142,14 @@ def main(
             logger.info(f"Loaded checkpoint from {resume_from_checkpoint}")
         except Exception as e:
             logger.warning(f"Failed to load checkpoint: {e}")
-    
-    # Enable Deepspeed with data parallelism and Zero-1
-    ds_config = {
-    "train_batch_size": 4 * 8,  # DP * total processes
-    "zero_optimization": {
-        "stage": 1,  # ZeRO Stage 1
-        "allgather_partitions": True,
-        "allgather_bucket_size": 5e8,
-        "reduce_scatter": True,
-        "reduce_bucket_size": 5e8,
-        }
-    }
-    
-    model, optimizer, _, lr_scheduler = deepspeed.initialize(
-    model=model,
-    optimizer=optimizer,
-    lr_scheduler=lr_scheduler,
-    config=ds_config
-    )
-
+            
     # Initialize WandB (if not in dev mode)
     if not dev:
         accelerator.init_trackers(
             project_name,
             config={
                 "learning_rate": lr,
-                "batch_size": batch_size,
+                "batch_size": per_device_batch_size,
                 "num_epochs": num_epochs,
                 "seed": seed,
                 "mixed_precision": mixed_precision,

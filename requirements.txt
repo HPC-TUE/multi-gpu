@@ -10,3 +10,4 @@ accelerate
 deepspeed
 requests
 natsort
+transformers
