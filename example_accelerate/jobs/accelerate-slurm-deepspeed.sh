@@ -4,7 +4,7 @@
 #SBATCH --partition=gpu_h100
 #SBATCH --nodes=2
 #SBATCH --gpus-per-node=4
-#SBATCH --tasks-per-node=4 # seems not affecting the result
+#SBATCH --tasks-per-node=1 # seems not affecting the result
 #SBATCH --output=./results/%x_%A_%a.out
 
 echo "Starting multi-node job on host $(hostname)..."
@@ -28,7 +28,6 @@ export NCCL_DEBUG=INFO
 export NCCL_DEBUG_SUBSYS=ALL
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 export NCCL_SOCKET_TIMEOUT=60
-export NCCL_IB_DISABLE=0
 export NCCL_NET_GDR_LEVEL=2 # enables direct memory access between GPUs across different nodes 
 ######
 
